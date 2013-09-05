@@ -46,8 +46,12 @@ RELATED WORKS
 USAGE
 {Visual}.               Repeat last change in all visually selected lines.
                         - characterwise: Start from cursor position.
-                        - linewise: Each line separately, starting from first column.
-                        - blockwise: Not supported.
+                        - linewise: Each line separately, starting from the
+                          current column (usually the first in this mode).
+                        - blockwise: Only the selected text. This is
+                          implemented by temporarily duplicating the selection
+                          to separate lines and repeating over those, starting
+                          from the first column.
 
                         Note: If the last normal mode command included a
                         {motion} (e.g. g~e), the repetition will also move

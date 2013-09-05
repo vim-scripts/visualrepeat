@@ -8,6 +8,23 @@
 " Maintainer:	Ingo Karkat <ingo@karkat.de>
 "
 " REVISION	DATE		REMARKS
+"   1.10.012	04-Sep-2013	ENH: Use the current cursor virtual column when
+"				repeating in linewise visual mode. Add
+"				visualrepeat#CaptureVirtCol() and
+"				visualrepeat#repeatOnVirtCol() for that.
+"				Minor: Also catch Vim echoerr exceptions and
+"				anything else.
+"				Move the error handling to the mapping itself
+"				and do it with echoerr so that further commands
+"				are properly aborted. Implement
+"				visualrepeat#ErrorMsg() to avoid a dependency to
+"				ingo#err#Get().
+"   1.10.011	14-Jun-2013	Minor: Make substitute() robust against
+"				'ignorecase'.
+"   1.10.010	18-Apr-2013	Check for existence of actual visual mode
+"				mapping; do not accept a select mode mapping,
+"				because we're applying it to a visual selection.
+"				Pass through a [count] to the :normal . command.
 "   1.03.009	21-Feb-2013	REGRESSION: Fix in 1.02 does not repeat recorded
 "				register when the mappings in repeat.vim and
 "				visualrepeat.vim differ. We actually need to
@@ -62,17 +79,16 @@ function! visualrepeat#set( sequence, ... )
 endfunction
 
 
-function! s:ErrorMsg( text )
-    let v:errmsg = a:text
-    echohl ErrorMsg
-    echomsg v:errmsg
-    echohl None
-
-    if &cmdheight == 1
-	" In visual mode, the mode message will override the error message.
-	sleep 500m
+let s:virtcol = 1
+function! visualrepeat#CaptureVirtCol()
+    let s:virtcol = virtcol('.')
+    return ''
+endfunction
+function! visualrepeat#repeatOnVirtCol( virtcol, count )
+    execute 'normal!' a:virtcol . '|'
+    if virtcol('.') >= a:virtcol
+	execute 'normal' a:count . '.'
     endif
-    normal! gv
 endfunction
 function! visualrepeat#repeat()
     if g:visualrepeat_tick == b:changedtick
@@ -89,7 +105,7 @@ function! visualrepeat#repeat()
 	" A mapping for visualrepeat.vim or repeat.vim to repeat has been set.
 	" Ensure that a corresponding visual mode mapping exists; some plugins
 	" that only use repeat.vim may not have this.
-	if ! empty(maparg(substitute(l:repeat_sequence, '^.\{3}', '<Plug>', 'g'), 'v'))
+	if ! empty(maparg(substitute(l:repeat_sequence, '^.\{3}', '<Plug>', 'g'), 'x'))
 	    " Handle mappings that use a register and want the same register
 	    " used on repetition.
 	    let l:reg = ''
@@ -113,31 +129,50 @@ function! visualrepeat#repeat()
 
 	    call feedkeys('gv' . l:reg . l:cnt, 'n')
 	    call feedkeys(l:repeat_sequence)
-	    return
+	    return 1
 	endif
     endif
 
-    " Note: :normal has no bang to allow a remapped '.' command here to enable
-    " repeat.vim functionality.
-
     try
+	" Note: :normal has no bang to allow a remapped '.' command here to
+	" enable repeat.vim functionality.
+
 	if visualmode() ==# 'v'
 	    " Repeat the last change starting from the current cursor position.
-	    normal .
+	    execute 'normal' (v:count ? v:count : '') . '.'
 	elseif visualmode() ==# 'V'
-	    " For all selected lines, repeat the last change in the line; the cursor
-	    " is set to the first column.
-	    '<,'>normal .
+	    " For all selected lines, repeat the last change in the line.
+	    if s:virtcol == 1
+		" The cursor is set to the first column.
+		execute "'<,'>normal" (v:count ? v:count : '') . '.'
+	    else
+		" The cursor is set to the cursor column; the last change is
+		" only applied to lines that have at least that many characters.
+		execute printf("'<,'>call visualrepeat#repeatOnVirtCol(%d, %s)",
+		\   s:virtcol,
+		\   string(v:count ? v:count : '')
+		\)
+	    endif
 	else
 	    throw 'visualrepeat: Cannot repeat in this visual mode!'
 	endif
-    catch /^Vim\%((\a\+)\)\=:E/
+	return 1
+    catch /^Vim\%((\a\+)\)\=:/
 	" v:exception contains what is normally in v:errmsg, but with extra
 	" exception source info prepended, which we cut away.
-	call s:ErrorMsg(substitute(v:exception, '^Vim\%((\a\+)\)\=:', '', ''))
+	let s:errorMsg = substitute(v:exception, '^\CVim\%((\a\+)\)\=:', '', '')
     catch /^visualrepeat:/
-	call s:ErrorMsg(substitute(v:exception, '^visualrepeat:\s*', '', ''))
+	let s:errorMsg = substitute(v:exception, '^\Cvisualrepeat:\s*', '', '')
+    catch
+	let s:errorMsg = v:exception
     endtry
+
+    return 0
+endfunction
+
+let s:errorMsg = ''
+function! visualrepeat#ErrorMsg()
+    return s:errorMsg
 endfunction
 
 augroup visualrepeatPlugin

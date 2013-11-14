@@ -1,6 +1,7 @@
 " visualrepeat.vim: Repeat command extended to visual mode.
 "
 " DEPENDENCIES:
+"   - ingo/selection.vim autoload script (optional; for blockwise repeat only)
 "
 " Copyright: (C) 2011-2013 Ingo Karkat
 "   The VIM LICENSE applies to this script; see ':help copyright'.
@@ -8,6 +9,10 @@
 " Maintainer:	Ingo Karkat <ingo@karkat.de>
 "
 " REVISION	DATE		REMARKS
+"   1.20.013	05-Sep-2013	ENH: Implement blockwise repeat through
+"				temporarily moving the block to a temporary
+"				range at the end of the buffer, like the vis.vim
+"				plugin.
 "   1.10.012	04-Sep-2013	ENH: Use the current cursor virtual column when
 "				repeating in linewise visual mode. Add
 "				visualrepeat#CaptureVirtCol() and
@@ -154,15 +159,57 @@ function! visualrepeat#repeat()
 		\)
 	    endif
 	else
-	    throw 'visualrepeat: Cannot repeat in this visual mode!'
+	    " Yank the selected block and repeat the last change in scratch
+	    " lines at the end of the buffer (using a different buffer would be
+	    " easier, but the repeated command may depend on the current
+	    " buffer's settings), so that the change is limited to the
+	    " selection. The vis.vim plugin does the same, but we cannot use it,
+	    " because it performs the movement (to the bottom of the current
+	    " buffer) via regular paste commands (which clobber the repeat
+	    " command). We need to be careful to avoid doing that, using only
+	    " lower level functions.
+	    let [l:count, l:startColPattern, l:startLnum, l:endLnum, l:finalLnum] = [v:count, ('\%>' . (virtcol("'<") - 1) . 'v'), line("'<"), line("'>"), line('$')]
+	    let l:selection = split(ingo#selection#Get(), '\n', 1)
+
+	    " Save the view after the yank so that the cursor resides at the
+	    " beginning of the selected block, just as we would expect after the
+	    " repeat. (The :normal / :delete of the temporary range later
+	    " modifies the cursor position.)
+	    let l:save_view = winsaveview()
+
+	    let l:tempRange = (l:finalLnum + 1) . ',$'
+	    call append(l:finalLnum, l:selection)
+	    " The cursor is set to the first column.
+	    execute l:tempRange . 'normal' (l:count ? l:count : '') . '.'
+	    let l:result = getline(l:finalLnum + 1, '$')
+	    try
+		" Using :undo to roll back the append and repeat is safer,
+		" because any potential modification outside the temporary range
+		" is also eliminated. Only explicitly delete the temporary range
+		" as a fallback.
+		undo
+	    catch /^Vim\%((\a\+)\)\=:E/
+		silent! execute l:tempRange . 'delete _'
+	    endtry
+
+	    for l:lnum in range(l:startLnum, l:endLnum)
+		let l:idx = l:lnum - l:startLnum
+		let l:line = getline(l:lnum)
+		let l:startCol = match(l:line, l:startColPattern)
+		let l:endCol = l:startCol + len(l:selection[l:idx])
+		let l:newLine = strpart(l:line, 0, l:startCol) . get(l:result, l:idx, '') . strpart(l:line, l:endCol)
+		call setline(l:lnum, l:newLine)
+	    endfor
+
+	    call winrestview(l:save_view)
 	endif
 	return 1
+    catch /^Vim\%((\a\+)\)\=:E117:.*ingo#selection#Get/ " E117: Unknown function: ingo#selection#Get
+	let s:errorMsg = 'For blockwise repeat, you need to install the ingo-library dependency'
     catch /^Vim\%((\a\+)\)\=:/
 	" v:exception contains what is normally in v:errmsg, but with extra
 	" exception source info prepended, which we cut away.
 	let s:errorMsg = substitute(v:exception, '^\CVim\%((\a\+)\)\=:', '', '')
-    catch /^visualrepeat:/
-	let s:errorMsg = substitute(v:exception, '^\Cvisualrepeat:\s*', '', '')
     catch
 	let s:errorMsg = v:exception
     endtry
